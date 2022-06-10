@@ -1,0 +1,377 @@
+#! /bin/bash
+
+# Program: dssc
+# Purpose: Controlling a small diy smart solar power plant. See: https://github.com/aloishockenschlohe/diy-smart-solarplant
+
+# !!
+# !! This code is in a early stage.
+# !! The authors are really bad programmers.
+# !! Use at own risk. You have been warned.
+# !!
+
+# History:
+# 220512-AHo: first hack
+# 220513-AHo: changed get_delta.
+# 220516-AHo: added get_vz_power_consumption
+# 220517-AHo: added init
+# 220519-AHo: added statistics
+# 220522-MSe: some debugging and a lot of cleanup... expect the unexpected. :-/
+# 220523-AHo: added dpm_stable
+# 220525-AHo: added dpm_stable_c
+# 220528-AHo: documentation
+# 220529-MSe: 'beautified' the output. :-D
+# 220601-AHo: Code survived 6 hours. A special value killed it. Added some sanity checks.
+# 220602-AHo: added some sanity checks.
+# 220603-AHo: rewrote 'get_delta' - results look a lot better now :-)
+# 220604-MSe: tuned 'get_delta'
+# 220606-AHo: Code survived 24 hours. And it is still up and running.
+# 220607-MSe: added comments, did some debugging
+# 220610-AHo: Added a lot of comments. Code is still UGLY (but it seems to work). 
+
+# External programs needed:
+#
+#  - bc (basic calculator)
+
+#===== Variables
+
+#----- Variables needed for syslog...
+
+        ver="dssc_220610"                              # version of this script
+
+#----- external programs
+
+	debug="/bin/echo"
+#	debug="/bin/false"
+
+#----- variables
+
+	# We read the power consumption from an instance in the local network via the tool 'wget'.
+	#
+	wget_args="-O - -q"
+	vz_ip="192.168.178.20"
+	vz_uuid="94f88820-261f-11ec-b8ce-9de20c49f0db"
+	vz_url="http://$vz_ip/middleware/data/$vz_uuid.txt?from=now"
+
+	# We provide information about the power supply (settings and delivered power) via a simple tcp server. 
+	# variables for tcp server
+	# Start the server with:
+	#
+	# nohup socat TCP4-LISTEN:12345,reuseaddr,fork EXEC:"cat /tmp/dpm86_current_power.txt",nofork,end-close &
+	#
+	# format of this file:
+	# dpm86powerout 69.0
+	srv_file="/tmp/dpm86_current_power.txt"
+
+	# variables for the dpm86 power supply
+	v_min="1600"			# minimum voltage	16.00 V
+	v_max="2700"			# maximum voltage	27.00 V
+	v_init="2600"			# int voltage		25.50 V
+	c_min="0"			# minimum current	0.000 A
+	c_max="8500"			# maximum current	8.500 A
+	c_init="2000"			# init current		2.000 A
+
+	# variables for a better understanding
+	error="1"
+
+### Procedures/Functions
+
+# Get the actual power consumption from a volkszaehler.org instance.
+function get_vz_power_consumption () {
+
+	# Read the actual power consumption via wget
+	local pc=`wget $wget_args $vz_url`
+	
+	# FIXME!
+	# Error handling!
+	
+	# The response from volkszaehler.org looks like this: "-34.56 W"
+	pc=`echo ${pc% *}`			# Cut everything behind the blank.
+	pc=`echo ${pc%.*}`			# Cut the decimal places.
+	if [[ -z $pc ]]; then pc="0"; fi	# If nothing is left (".45" -> "") set the power consumption to "0".
+
+	# Sanity check. Are there other characters than 0-9 and "-"?
+	case $pc in
+    		''|*[!0-9\-]*)	$debug "get_vz_power_consumption: Return value from Volkszaehler.org is not a number: '$pc'"
+    				echo "0"
+    				return $error;;
+	esac
+
+	echo $pc
+}
+
+# Provide information about the delivered and the requested power in file '$srv_file'. Volkszaehler.org may read it.
+function statistics () {
+
+	local power=""
+	local current=`./dpm86ng current`
+	local voltage=`./dpm86ng voltage`
+
+	# Calculate actual delivered power
+	if [ "$current" -eq "0" ]; then
+		power="0"		# No division by zero please. :-)
+	else
+		power=`echo "scale=2; $voltage/100*$current/1000" | bc -l`
+	fi
+
+	echo "dpm86powerout $power" > $srv_file
+	echo "dpm86powersetting $w_setpoint" >> $srv_file
+}
+
+# Wait for a stable voltage and current. Used after the init of the power supply.
+function dpm_stable () {
+
+	local v_target="$1"
+	local c_target="$2"
+	local voltage="0"
+	local current="0"
+	local v_range="150"
+	local c_range="150"
+	local v_delta="0"
+	local c_delta="0"
+	local stable=0
+	local rounds="0"
+	
+	echo "Waiting for stable voltage and current (max. 50 rounds)."
+	echo "|====.====|====.====|====.====|====.====|====.====|"
+	echo -n " "
+
+	# Reapeat until 3 measurings in a row are ok or more than 50 measurings are done
+	while (($stable < 3 && $rounds < 51)); do
+	
+		# Get actual delivered voltage and current. 
+		voltage=`./dpm86ng voltage`
+		current=`./dpm86ng current`
+
+		# Calculate the distance between actual voltage/current and the corresponding target
+		v_delta=`echo "scale=0; $voltage-$v_target" | bc -l`
+		c_delta=`echo "scale=0; $current-$c_target" | bc -l`
+		v_delta=${v_delta#-}
+		c_delta=${c_delta#-}
+		
+		# If both values are close enough to the targets...
+		if (($c_delta < $c_range && $v_delta < $v_range)); then
+			# ...increase the stable counter,
+			echo -n "+"
+			((stable++))
+		else
+			# ...otherwise reset the sable counter to zero (row is broken).
+			echo -n "-"
+			stable="0"
+		fi
+		((rounds++))
+	done
+	echo
+}
+
+# After the current has been changed, sometimes the power supply needs some time to adopt. Wait for a stable current.
+function dpm_stable_c () {
+
+	local c_target="$1"
+	local stable=0
+	local c_range="150"
+	local current="0"
+	local c_delta="0"
+	local rounds="0"
+
+	echo "Waiting for stable current (max. 20 rounds)."
+	echo "|====.====|====.====|"
+	echo -n " "
+	
+	# Reapeat until 3 measurings in a row are ok or more than 20 measurings are done.
+	while (($stable < 3 && $rounds < 21)); do
+	
+		# Get actual delivered current.
+		current=`./dpm86ng current`
+		
+		# Calculate the delta between actual current and the target current.
+		c_delta=`echo "scale=0; $current-$c_target" | bc -l`
+		c_delta=${c_delta#-}
+		
+		# If delivered current is close enough to the target...
+		if (($c_delta < $c_range)); then
+			# ...increase the stable counter,
+			echo -n "+"
+			((stable++))
+		else
+			# ...otherwise reset the stable counter (row is broken).
+			echo -n "-"
+			stable="0"
+		fi
+		((rounds++))
+	done
+	echo
+}
+
+# Init of the dpm86 power supply.
+#
+# ToDo: Error handling.
+# ToDo: $v_init and $c_init as parameter.
+function dpm_init () {
+
+	local result=""
+
+	echo "dpm_init"
+	echo "========"
+	echo "Turning dpm off."
+	result=`./dpm86ng output off`
+	echo "Setting voltage to '$v_init' ticks."
+	result=`./dpm86ng voltage $v_init`
+	echo "Setting current to '$c_init' ticks."
+	result=`./dpm86ng current $c_init`
+	echo "Setting constant current."
+	result=`./dpm86ng const current`
+	echo "Turning dpm on."
+	result=`./dpm86ng output on`
+
+	# Wait until voltage and current are stabilized.
+	dpm_stable $v_init $c_init
+}
+
+# Set a new current in the dpm86 power supply.
+function dpm_adapt () {
+
+	local current=""
+	local voltage=""
+	local delta_c=""
+	local power=""
+
+	# Read the actual deliverd voltage and current
+	voltage=`./dpm86ng voltage`
+	current=`./dpm86ng current`
+	
+	# Calculate the actual delivered power
+	if [ "$current" -eq "0" ]; then
+		power="0"			# No division by zero please. :-)
+	else
+		power=`echo "scale=2; $voltage/100*$current/1000" | bc -l`
+	fi
+
+	# Calculate the new current
+	delta_c=`echo "scale=3; $1/$voltage*100" | bc -l`	# !!! What happens if $v = "0"....?
+	new_c=`echo "scale=3; $current+$delta_c*1000" | bc -l`
+
+	# Wert aufbereiten, sicherstellen dass der Wertebereich eingehalten ist	
+	new_c=`echo ${new_c%.*}`				# cut of decimal places ("3.75" -> "3")
+	if [[ -z $new_c ]]; then 	new_c="0"; fi		# if the whole numberis gone (".45" went to "") auf "0" setzen.
+	if [ $new_c -gt $c_max ]; then	new_c=$c_max; fi	# check upper limit
+	if [ $new_c -lt "0" ]; then	new_c="1"; fi		# check lower limit
+
+	echo
+	echo "+++ dpm_adapt"
+	echo "-------------------------------------"
+	echo "actual power consumption from grid   : $1 W"
+	echo "actual battery supply                : $power W [ $voltage V (ticks) and $current A (ticks)]"
+	echo "-------------------------------------"
+	echo "current from battery will adjusted by: $delta_c A"
+	echo "new current from battery will be     : $new_c A (ticks)"
+
+	# Idee: Bedingung einbauen: Wenn $new_c und $a sich nicht sehr unterscheiden: nichts tun.
+	delta_c=`echo "scale=0; $current-$new_c" | bc -l`
+	delta_c=${delta_c#-}
+	echo "current setting change will be       : $delta_c A (ticks)"
+
+	max_a_delta=100
+	if [ $delta_c -lt "$max_a_delta" ]; then
+		echo "Current change would be too small - ignored."
+	else
+		# Set the new current (we are steering the power source by the current - the voltage will be untouched).
+		./dpm86ng current $new_c
+		# Wait for a stable current.
+		dpm_stable_c $new_c
+	fi
+	
+	echo "-------------------------------------"
+	# Update der gewuenschten Leistung ($w_setpoint)
+	dpm_v_setpoint=`./dpm86ng voltage`					# ermittle gewuenschte Spannung
+	w_setpoint=`echo "scale=2; $dpm_v_setpoint/100*$new_c/1000" | bc -l`	# ermittle gewuenschten Leistung 
+		
+	statistics	# write some statistics for volkszaehler.org instance (this will take some time)
+}
+
+# Return the needed correction (in Watt)
+function get_delta () {
+
+	local measurements="$1"				# nr of measurements
+	local pc_old="0"				# power consumption (old reading)
+	local pc_now="0"				# power consumption (actual reading)
+	local pc_sum="0"				# sum of all power consumption readings
+	local cnt="1"					# counter
+	local timestamp=`date "+%Y-%m-%d %H:%M:%S"`	# timestamp
+	local delta="0"
+	local max_delta="120"
+	local divisor="0"
+	
+	echo
+	echo "+++ get_delta"
+	while [ $cnt -le $measurements ]; do
+
+		# init
+		if [ $cnt -eq "1" ]; then
+			pc_old=`get_vz_power_consumption`	# read the current power consumption from volkszaehler.org
+			pc_sum=$pc_old				# initialise of the sum of all readings (= current power consumption)
+			((t++))
+			$debug -n "$timestamp -- $measurements points -- '$pc_old' "
+		fi
+
+		statistics	# write some statistics for volkszaehler.org instance (this will take some time)
+
+		# Calculate the change in power consumption.
+		pc_now=`get_vz_power_consumption`		# Get current power consumption...
+		delta=$((pc_old - pc_now))			# ...calculate the delta between current and last power consumption..
+		delta=${delta#-}				# ...as a absolut value.
+		$debug -n "($delta) '$pc_now' "
+		
+		# If the change is too big...
+		if [ $delta -gt "$max_delta" ]; then
+			# ...start a new series,
+			$debug "--- Delta bigger than $max_delta! ---"
+			cnt="1"
+		else
+			# ...otherwise add up the  
+			pc_sum=$((pc_sum + (( pc_now * cnt )) ))	# Every measurment gets multiplied by its number in the series.
+									# In this way, the younger the measured values, the higher they are weighted.
+			pc_old=$pc_now
+			((cnt++))
+		fi
+	done
+	
+	
+	# Every measurment gets multiplied by its number in the series.
+	# To build a kind of average, we have to sum the positions of the measurments.
+	for ((cnt = 1 ; cnt <= $measurements ; cnt++)); do
+		divisor=$((divisor + cnt))
+	done
+
+	# Calculate the average and call it "delta".
+	delta=`echo "scale=0; $pc_sum/$divisor" | bc -l`
+	
+	echo $delta
+	$debug " = $delta"
+}
+
+### Main Code
+
+echo "dssc, Version $ver"
+echo
+
+dpm_init
+
+measurements="3"	# We start with a short tracking (3 measurements)
+while true; do
+
+	echo
+	echo "+++ new cycle"
+	delta=`get_delta $measurements`
+	if [ $delta -gt "50" ] || [ $delta -lt "-50" ]; then
+		dpm_adapt $delta
+		measurements="3"
+		echo "Short tracking."
+#	elif [ $delta -gt "5" ] || [ $delta -lt "-5" ]; then
+	else
+		dpm_adapt $delta
+		measurements="5"
+		echo "Normal tracking."
+	fi
+done
+
+# this is the last line :)
