@@ -65,9 +65,9 @@
 	# variables for the dpm86 power supply
 	v_min="1600"			# minimum voltage	16.00 V
 	v_max="2700"			# maximum voltage	27.00 V
-	v_init="2600"			# int voltage		25.50 V
+	v_init="2650"			# int voltage		24.50 V
 	c_min="0"			# minimum current	0.000 A
-	c_max="8500"			# maximum current	8.500 A
+	c_max="9500"			# maximum current	8.500 A
 	c_init="2000"			# init current		2.000 A
 
 	# variables for a better understanding
@@ -136,7 +136,7 @@ function dpm_stable () {
 	echo -n " "
 
 	# Reapeat until 3 measurings in a row are ok or more than 50 measurings are done
-	while (($stable < 3 && $rounds < 51)); do
+	while (($stable < 3 && $rounds < 10)); do
 	
 		# Get actual delivered voltage and current. 
 		voltage=`./dpm86ng voltage`
@@ -230,62 +230,60 @@ function dpm_init () {
 # Set a new current in the dpm86 power supply.
 function dpm_adapt () {
 
+	local c_setting=""
+	local v_setting=""
 	local current=""
 	local voltage=""
+	
 	local delta_c=""
 	local power=""
 
 	# Read the actual deliverd voltage and current
-	voltage=`./dpm86ng voltage`
-	current=`./dpm86ng current`
+	v_setting=`./dpm86ng voltage`
+	c_setting=`./dpm86ng current`
 	
-	# Calculate the actual delivered power
-	if [ "$current" -eq "0" ]; then
-		power="0"			# No division by zero please. :-)
-	else
-		power=`echo "scale=2; $voltage/100*$current/1000" | bc -l`
+	# ...and get voltage, current and power in a human readable form.
+	voltage=`echo "scale=2; $v_setting/100" | bc -l`
+	current=`echo "scale=2; $c_setting/1000" | bc -l`
+	power=`echo "scale=2; $voltage*$current" | bc -l`
+
+	# Calculate the new current setting
+	voltage_target=`echo "scale=2; $v_init/100" | bc -l`
+	power_target=`echo "scale=2; $power+$1" | bc -l`
+	power_target=`echo ${power_target%.*}`
+	if [ $power_target -lt "0" ]; then
+		power_target="0"
 	fi
-
-	# Calculate the new current
-	delta_c=`echo "scale=3; $1/$voltage*100" | bc -l`	# !!! What happens if $v = "0"....?
-	new_c=`echo "scale=3; $current+$delta_c*1000" | bc -l`
-
-	# Wert aufbereiten, sicherstellen dass der Wertebereich eingehalten ist	
-	new_c=`echo ${new_c%.*}`				# cut of decimal places ("3.75" -> "3")
-	if [[ -z $new_c ]]; then 	new_c="0"; fi		# if the whole numberis gone (".45" went to "") auf "0" setzen.
-	if [ $new_c -gt $c_max ]; then	new_c=$c_max; fi	# check upper limit
-	if [ $new_c -lt "0" ]; then	new_c="1"; fi		# check lower limit
-
-	echo
+	current_target=`echo "scale=2; $power_target/$voltage_target" | bc -l`
 	echo "+++ dpm_adapt"
-	echo "-------------------------------------"
-	echo "actual power consumption from grid   : $1 W"
-	echo "actual battery supply                : $power W [ $voltage V (ticks) and $current A (ticks)]"
-	echo "-------------------------------------"
-	echo "current from battery will adjusted by: $delta_c A"
-	echo "new current from battery will be     : $new_c A (ticks)"
+	echo "actual power consumption from grid: $1 W"
+	echo "actual battery supply             : $power W [ $voltage V with $current A ]"
+	echo "target battery supply             : $power_target W [ $voltage_target V with $current_target A ]"
 
-	# Idee: Bedingung einbauen: Wenn $new_c und $a sich nicht sehr unterscheiden: nichts tun.
-	delta_c=`echo "scale=0; $current-$new_c" | bc -l`
-	delta_c=${delta_c#-}
-	echo "current setting change will be       : $delta_c A (ticks)"
+	# Calculate the new setting for the current
+	c_target_setting=`echo "scale=2; $current_target*1000" | bc -l`
+	c_target_setting=`echo ${c_target_setting%.*}`					# cut of decimal places ("3.75" -> "3")
+	if [[ -z $c_target_setting ]]; then 		c_target_setting="0"; fi	# if the whole numberis gone (".45" went to "") auf "0" setzen.
+	if [ $c_target_setting -gt $c_max ]; then	c_target_setting=$c_max; fi	# check upper limit
+	if [ $c_target_setting -lt "0" ]; then		c_target_setting="0"; fi	# check lower limit
 
-	max_a_delta=100
-	if [ $delta_c -lt "$max_a_delta" ]; then
+	c_delta_setting=$(($c_target_setting-$c_setting))
+	c_delta_setting=${c_delta_setting#-}
+
+	max_a_delta="100"
+	if [ $c_delta_setting -lt "$max_a_delta" ]; then
 		echo "Current change would be too small - ignored."
 	else
-		# Set the new current (we are steering the power source by the current - the voltage will be untouched).
-		./dpm86ng current $new_c
+		# Set the new current (we are controlling the power source by the current - the voltage will be untouched).
+		echo "Setting the new current setting '$c_target_setting'."
+		./dpm86ng current $c_target_setting
 		# Wait for a stable current.
-		dpm_stable_c $new_c
+		dpm_stable_c $c_target_setting
 	fi
 	
-	echo "-------------------------------------"
 	# Update der gewuenschten Leistung ($w_setpoint)
-	dpm_v_setpoint=`./dpm86ng voltage`					# ermittle gewuenschte Spannung
-	w_setpoint=`echo "scale=2; $dpm_v_setpoint/100*$new_c/1000" | bc -l`	# ermittle gewuenschten Leistung 
-		
-	statistics	# write some statistics for volkszaehler.org instance (this will take some time)
+	w_setpoint=$power_target
+	statistics			# write some statistics for volkszaehler.org instance (this will take some time)
 }
 
 # Return the needed correction (in Watt)
@@ -297,7 +295,7 @@ function get_delta () {
 	local pc_sum="0"				# sum of all power consumption readings
 	local cnt="1"					# counter
 	local timestamp=`date "+%Y-%m-%d %H:%M:%S"`	# timestamp
-	local delta="0"
+	local my_delta="0"
 	local max_delta="120"
 	local divisor="0"
 	
@@ -309,7 +307,7 @@ function get_delta () {
 		if [ $cnt -eq "1" ]; then
 			pc_old=`get_vz_power_consumption`	# read the current power consumption from volkszaehler.org
 			pc_sum=$pc_old				# initialise of the sum of all readings (= current power consumption)
-			((t++))
+			((cnt++))
 			$debug -n "$timestamp -- $measurements points -- '$pc_old' "
 		fi
 
@@ -317,12 +315,12 @@ function get_delta () {
 
 		# Calculate the change in power consumption.
 		pc_now=`get_vz_power_consumption`		# Get current power consumption...
-		delta=$((pc_old - pc_now))			# ...calculate the delta between current and last power consumption..
-		delta=${delta#-}				# ...as a absolut value.
-		$debug -n "($delta) '$pc_now' "
+		my_delta=$((pc_old - pc_now))			# ...calculate the delta between current and last power consumption..
+		my_delta=${my_delta#-}				# ...as a absolut value.
+		$debug -n "($my_delta) '$pc_now' "
 		
 		# If the change is too big...
-		if [ $delta -gt "$max_delta" ]; then
+		if [ $my_delta -gt "$max_delta" ]; then
 			# ...start a new series,
 			$debug "--- Delta bigger than $max_delta! ---"
 			cnt="1"
@@ -344,8 +342,6 @@ function get_delta () {
 
 	# Calculate the average and call it "delta".
 	delta=`echo "scale=0; $pc_sum/$divisor" | bc -l`
-	
-	echo $delta
 	$debug " = $delta"
 }
 
@@ -361,7 +357,7 @@ while true; do
 
 	echo
 	echo "+++ new cycle"
-	delta=`get_delta $measurements`
+	get_delta $measurements
 	if [ $delta -gt "50" ] || [ $delta -lt "-50" ]; then
 		dpm_adapt $delta
 		measurements="3"
