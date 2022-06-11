@@ -5,6 +5,7 @@
 
 # !!
 # !! This code is in a early stage.
+# !! BUT IT WORKS REALLY GOOD!
 # !! The authors are really bad programmers.
 # !! Use at own risk. You have been warned.
 # !!
@@ -27,7 +28,7 @@
 # 220606-AHo: Code survived 24 hours. And it is still up and running.
 # 220607-MSe: added comments, did some debugging
 # 220610-AHo: Added a lot of comments. Code is still UGLY (but it seems to work). 
-# 220611-MSe: Simplified output. Cleanup of 
+# 220611-MSe: Simplified output. Cleanup of dpm_adapt. Should be readable now.
 
 # External programs needed:
 #
