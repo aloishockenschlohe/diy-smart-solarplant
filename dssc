@@ -5,7 +5,6 @@
 
 # !!
 # !! This code is in a early stage.
-# !! BUT IT WORKS REALLY GOOD!
 # !! The authors are really bad programmers.
 # !! Use at own risk. You have been warned.
 # !!
@@ -28,7 +27,9 @@
 # 220606-AHo: Code survived 24 hours. And it is still up and running.
 # 220607-MSe: added comments, did some debugging
 # 220610-AHo: Added a lot of comments. Code is still UGLY (but it seems to work). 
-# 220611-MSe: Simplified output. Cleanup of dpm_adapt. Should be readable now.
+# 220611-MSe: Simplified output. Cleanup of dpm_adapt
+# 220614-MSe: first error handling stuff for dpm86ng (a lot of FIXMEs are still present)
+# 220616-MSe: some more comments
 
 # External programs needed:
 #
@@ -39,7 +40,7 @@
 
 #----- Variables needed for syslog...
 
-        ver="dssc_220611"                              # version of this script
+        ver="dssc_220614"                              # version of this script
 
 #----- external programs
 
@@ -66,6 +67,11 @@
 	srv_file="/tmp/dpm86_current_power.txt"
 
 	# variables for the dpm86 power supply
+	#
+	# Be aware:
+	# These values depend on the power supply and the inverter.
+	# Choose them within the valid ranges and be sure that MPPT can handle them.
+	#
 	v_min="1600"			# minimum voltage	16.00 V
 	v_max="2700"			# maximum voltage	27.00 V
 	v_init="2650"			# int voltage		24.50 V
@@ -84,9 +90,6 @@ function get_vz_power_consumption () {
 	# Read the actual power consumption via wget
 	local pc=`wget $wget_args $vz_url`
 	
-	# FIXME!
-	# Error handling!
-	
 	# The response from volkszaehler.org looks like this: "-34.56 W"
 	pc=`echo ${pc% *}`			# Cut everything behind the blank.
 	pc=`echo ${pc%.*}`			# Cut the decimal places.
@@ -99,23 +102,26 @@ function get_vz_power_consumption () {
     				return $error;;
 	esac
 
+	# everything ok
 	echo $pc
+	return $ok
 }
 
 # Provide information about the delivered and the requested power in file '$srv_file'. Volkszaehler.org may read it.
 function statistics () {
 
 	local power=""
-	local current=`./dpm86ng current`
-	local voltage=`./dpm86ng voltage`
+	local current=`./dpm86ng current`	# FIXME: error handling
+	local voltage=`./dpm86ng voltage`	# FIXME: error handling
 
 	# Calculate actual delivered power
 	if [ "$current" -eq "0" ]; then
-		power="0"		# No division by zero please. :-)
+		power="0"			# No division by zero please. :-)
 	else
 		power=`echo "scale=2; $voltage/100*$current/1000" | bc -l`
 	fi
 
+	# Write the values.
 	echo "dpm86powerout $power" > $srv_file
 	echo "dpm86powersetting $w_setpoint" >> $srv_file
 }
@@ -138,12 +144,12 @@ function dpm_stable () {
 	echo "|====.====|====.====|"
 	echo -n " "
 
-	# Reapeat until 3 measurings in a row are ok or more than 50 measurings are done
+	# Reapeat until 3 measurings in a row are ok or more than 20 measurings are done
 	while (($stable < 3 && $rounds < 20)); do
 	
 		# Get actual delivered voltage and current. 
-		voltage=`./dpm86ng voltage`
-		current=`./dpm86ng current`
+		voltage=`./dpm86ng voltage`			# FIXME: error handling
+		current=`./dpm86ng current`			# FIXME: error handling
 
 		# Calculate the distance between actual voltage/current and the corresponding target
 		v_delta=`echo "scale=0; $voltage-$v_target" | bc -l`
@@ -157,7 +163,7 @@ function dpm_stable () {
 			echo -n "+"
 			((stable++))
 		else
-			# ...otherwise reset the sable counter to zero (row is broken).
+			# ...otherwise reset the stable counter to zero (row is broken).
 			echo -n "-"
 			stable="0"
 		fi
@@ -170,10 +176,10 @@ function dpm_stable () {
 function dpm_stable_c () {
 
 	local c_target="$1"
-	local stable=0
 	local c_range="150"
 	local current="0"
 	local c_delta="0"
+	local stable=0
 	local rounds="1"
 
 	echo "Waiting for stable current (max. 20 rounds)."
@@ -184,12 +190,12 @@ function dpm_stable_c () {
 	while (($stable < 3 && $rounds < 21)); do
 	
 		# Get actual delivered current.
-		current=`./dpm86ng current`
+		current=`./dpm86ng current`	# FIXME: error handling
 		
-		# Calculate the delta between actual current and the target current.
+		# Calculate the delta between the actual and the target current.
 		c_delta=`echo "scale=0; $current-$c_target" | bc -l`
 		c_delta=${c_delta#-}
-		
+	
 		# If delivered current is close enough to the target...
 		if (($c_delta < $c_range)); then
 			# ...increase the stable counter,
@@ -206,9 +212,6 @@ function dpm_stable_c () {
 }
 
 # Init of the dpm86 power supply.
-#
-# ToDo: Error handling.
-# ToDo: $v_init and $c_init as parameter.
 function dpm_init () {
 
 	local result=""
@@ -216,15 +219,15 @@ function dpm_init () {
 	echo "dpm_init"
 	echo "========"
 	echo "Turning dpm off."
-	result=`./dpm86ng output off`
+	result=`./dpm86ng output off`			# FIXME: error handling
 	echo "Setting voltage to '$v_init' ticks."
-	result=`./dpm86ng voltage $v_init`
+	result=`./dpm86ng voltage $v_init`		# FIXME: error handling
 	echo "Setting current to '$c_init' ticks."
-	result=`./dpm86ng current $c_init`
+	result=`./dpm86ng current $c_init`		# FIXME: error handling
 	echo "Setting constant current."
-	result=`./dpm86ng const current`
+	result=`./dpm86ng const current`		# FIXME: error handling
 	echo "Turning dpm on."
-	result=`./dpm86ng output on`
+	result=`./dpm86ng output on`			# FIXME: error handling
 
 	# Wait until voltage and current are stabilized.
 	dpm_stable $v_init $c_init
@@ -246,11 +249,11 @@ function dpm_adapt () {
 	local c_target_setting=""	# the setting for the new current
 	local delta_c=""
 
-	# Read the actual deliverd voltage and current
-	v_setting=`./dpm86ng voltage`
-	c_setting=`./dpm86ng current`
+	# Read the actual deliverd voltage and current...
+	v_setting=`./dpm86ng voltage`		# FIXME: error handling
+	c_setting=`./dpm86ng current`		# FIXME: error handling
 	
-	# ...and get the actual values in a human readable format (voltage, current and power)
+	# ...and translate the values in a human readable format (voltage, current and power)
 	v=`echo "scale=2; $v_setting/100" | bc -l`
 	c=`echo "scale=2; $c_setting/1000" | bc -l`
 	p=`echo "scale=2; $v*$c" | bc -l`
@@ -261,11 +264,12 @@ function dpm_adapt () {
 
 	p_target=`echo "scale=2; ($p+$1)*1.1" | bc -l`		# The new power is the actual power plus the delta plus 10%.
 	p_target=`echo ${p_target%.*}`				# Cut of decimal places ("3.75" -> "3").
-	if [[ -z $p_target ]]; then	p_target="0"; fi	# If the whole number is gone (".45" went to "") set it to "0".
-	if [ $p_target -lt "0" ]; then	p_target="0"; fi	# Power can never be negative.
-	
-	c_target=`echo "scale=2; $p_target/$v_target" | bc -l`	# The new current is the new power divided by the new voltage..
+	if [[ -z $p_target ]]; then	p_target="0"; fi	# If the whole number is gone (".45" -> to "") set it to "0".
+	if [ $p_target -lt "0" ]; then	p_target="0"; fi	# Check lower limit.
 
+	c_target=`echo "scale=2; $p_target/$v_target" | bc -l`	# The new current is the new power divided by the new voltage.
+
+	# Print some info.
 	echo "+++ dpm_adapt"
 	echo "actual power consumption from grid: $1 W"
 	echo "actual battery supply             : $p W [ $v V with $c A ]"
@@ -273,17 +277,17 @@ function dpm_adapt () {
 
 	# Calculate and check the new current setting for the new power.
 	c_target_setting=`echo "scale=2; $c_target*1000" | bc -l`
-	c_target_setting=`echo ${c_target_setting%.*}`					# cut of decimal places ("3.75" -> "3")
-	if [[ -z $c_target_setting ]]; then 		c_target_setting="0"; fi	# if the whole number is gone (f.e. ".45" went to "") set it to "0". 
-	if [ $c_target_setting -gt $c_max ]; then	c_target_setting=$c_max; fi	# check upper limit
-	if [ $c_target_setting -lt "0" ]; then		c_target_setting="0"; fi	# check lower limit
+	c_target_setting=`echo ${c_target_setting%.*}`					# Cut of decimal places ("3.75" -> "3").
+	if [[ -z $c_target_setting ]]; then 		c_target_setting="0"; fi	# If the whole number is gone (".45" -> to "") set it to "0".
+	if [ $c_target_setting -gt $c_max ]; then	c_target_setting=$c_max; fi	# Check upper limit.
+	if [ $c_target_setting -lt "0" ]; then		c_target_setting="0"; fi	# Check lower limit.
 
 	# Calculate and print the targets in a human readable format.
 	c_target=`echo "scale=2; c_target_setting/1000" | bc -l`
 	p_target=`echo "scale=2; $v_target*$c_target" | bc -l`
 	echo "corrected battery supply          : $p_target W [ $v_target V with $c_target A ]"
 
-	# Calculate the differnce between the old and the new current settings and check if it is too small.
+	# Calculate the difference between the old and the new current settings and check if it is too small.
 	c_delta_setting=$(($c_target_setting-$c_setting))
 	c_delta_setting=${c_delta_setting#-}
 
@@ -292,12 +296,13 @@ function dpm_adapt () {
 		echo "The change in the current setting would be too small ('$c_delta_setting') - ignored."
 	else
 		./dpm86ng current $c_target_setting	# Set the new current (we are controlling the power source by the delivered current)
+							# FIXME: error handling
 		dpm_stable_c $c_target_setting		# Wait for a stable current.
 	fi
 	
-	# updte the new power target ($w_setpoint is a global variable)
-	w_setpoint=$p_target
-	statistics			# write some statistics for volkszaehler.org instance (this will take some time)
+	# write some statistics for volkszaehler.org instance (this will take some time)
+	w_setpoint=$p_target		# update the new power target ($w_setpoint is a global variable)
+	statistics
 }
 
 # Return the needed power correction (in a human readable format Watt)
@@ -315,7 +320,7 @@ function get_delta () {
 	echo "+++ get_delta"
 	while [ $cnt -le $measurements ]; do
 
-		# init
+		# Init
 		if [ $cnt -eq "1" ]; then
 			pc_old=`get_vz_power_consumption`	# read the current power consumption from volkszaehler.org
 			pc_sum=$pc_old				# initialise of the sum of all readings (= current power consumption)
@@ -364,7 +369,7 @@ echo
 
 dpm_init
 
-measurements="3"	# We start with a short tracking (3 measurements)
+measurements="3"	# we start with a short tracking (3 measurements)
 while true; do
 
 	timestamp=`date "+%Y-%m-%d %H:%M:%S"`
