@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Program: pp_respawn
+# Program: pp_respawn 
 # Purpose: helper script for starting up and respawning the software for the power plant
 
 	DSSC="dssc.py"
