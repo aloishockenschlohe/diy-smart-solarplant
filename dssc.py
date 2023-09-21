@@ -40,7 +40,21 @@ ok = 0
 error = 1
 
 C_INIT =  2.55
+
+# A 24 V lithium-ion battery actually delivers between 28.8 V (fully charged) and 20.0 V (fully discharged, last gasp, could/will damage the battery)
+# The values above apply when no power is drawn from the battery.
+# The output voltage V_INIT is set to 25.5 V, so power drain ends when the battery delivers less than 26 V (which corresponds to a state of charge of about 30%).
+#
 V_INIT = 25.50
+
+# Only the current is permanently adjusted to retrieve the desired power.
+# In practice 25.5 volts proved to be a good value for the inverter I used (MI600 from Bosswerk).
+# At other voltages I have observed strong and unmotivated fluctuations of the current intensity
+# (probably has something to do with the interaction between MPPT algorithm of the inverter and the reaction time of the power supply).
+#
+# Note: I defined the upper limit of the current to 6 A (which corresponds to a maximum power drain of 6 A * 25.5 V = 152 watts).
+# I did this because this value corresponds quite exactly to the basic demand of my apartment during the night and so I can quite relaxed drain 1.7 kWh over 12 hours.
+#
 C_MAX  =  6.0
 
 
