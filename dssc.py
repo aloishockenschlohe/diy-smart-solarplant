@@ -23,10 +23,26 @@ import decimal
 
 #----- variables
 
-ver="221109"			# version of this script
+ver="240101"			# version of this script
 
-# DPM settings
-tty="/dev/ttyUSB1"		# The device via this script is talkinf to the power supply.
+# DPM86 communication
+# ===================
+# The DPM86 power supply unit is controlled via the "RS485" protocol over a physical connection
+# between the computer and the power supply unit (cable with two wires, e.g. bell wire).
+#
+# On the RPi, the corresponding pins on the GPIO strip can be used or a corresponding interface can be
+# added with a USB-to-RS485 adapter (these adapters cost a few €). Either way - at the end of the day,
+# the device via which the power supply unit can be accessed must be entered here.
+#
+# -> /dev/ttyUSBx - if you use a USB-to-RS485 adapter 
+# -> /dev/ttyAMA0 - if you use the PL011-UART from the Raspberry (untested!)
+# -> /dev/ttyS0 - the mini UART from the Raspberry (untested!)
+#
+# Good sources (in German):
+# - https://www.raspberry-pi-geek.de/ausgaben/rpg/2020/02/serielle-kommunikation-ueber-rs-485-mit-dem-raspberry-pi/
+# - https://www.raspberry-pi-geek.de/ausgaben/rpg/2019/12/serielle-kommunikation-ueber-rs-232-rs-485-teil-1/
+#
+tty="/dev/ttyUSB1"		# The device via this script is talking to the power supply.
 
 # We read the power consumption from a volkszaehler.org instance in the local network via the external tool 'wget'.
 #
